@@ -40,6 +40,21 @@ def test_update_hosts_file_replace(tmpdir, monkeypatch):
     
     assert actual == expected
 
+def test_update_hosts_file_replace_with_command(tmpdir, monkeypatch):
+    def map_hosts():
+        return { 'nginx.corp.internal': ['172.0.0.3'] }
+    monkeypatch.setattr(docker_hosts_update, 'map_hosts', map_hosts)
+
+    testfile = "tests/preexisting_section_hosts"
+    fn = tmpdir.join("preexisting_section_hosts")
+    fn.write(Path(testfile).read_text())
+    shutil.copyfile(testfile, fn)
+    docker_hosts_update.update_hosts_file(filename=fn, with_command="sed 's/nginx.corp.internal/changed.with.command/'")
+
+    expected = Path('tests/preexisting_section_hosts_with_command_expected').read_text()
+    actual = Path(fn).read_text()
+
+    assert actual == expected
 
 def test_main_no_events(tmpdir, monkeypatch):
     mock_update_hosts_file = Mock(return_value=True)

@@ -4,6 +4,9 @@ import docker
 import sys
 from typing import Dict, List
 import click_log
+import subprocess
+import os
+import shlex
 
 logger = logging.getLogger(__name__)
 click_log.basic_config(logger)
@@ -28,7 +31,7 @@ def map_hosts() -> Dict[str, List[str]]:
     return host_map
 
 
-def update_hosts_file(filename: str):
+def update_hosts_file(filename: str, with_command = None, trigger_type=None, trigger_status=None, event: dict=None):
     host_map = map_hosts()
     lines = []
     for hostname, ips in host_map.items():
@@ -58,6 +61,28 @@ def update_hosts_file(filename: str):
         logger.debug('Found no previously generated section, will append.')
         new_host_file = original_host_file + hosts_file_section
 
+    # with-command
+    if with_command != None:
+        cmd_env = os.environ.copy()
+        if trigger_status != None:
+            cmd_env["TRIGGER_STATUS"] = trigger_status
+        if trigger_type != None:
+            cmd_env["TRIGGER_TYPE"] = trigger_type
+
+        if event != None:
+            #cmd_env = {}
+            dict2env(cmd_env, 'EVENT', event)
+            #cmd_env.update(event_env)
+
+        cmd = subprocess.Popen(shlex.split(with_command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, text=True, env=cmd_env)
+        cmd_stdout, cmd_stderr = cmd.communicate(input=new_host_file)
+        cmd.wait()
+        if cmd.returncode == 0:
+            new_host_file = cmd_stdout
+        else:
+            print("return code != 0")
+    # ~with-command
+
     try: 
         with open(filename, 'w') as hostsfile:
             original_host_file = hostsfile.write(new_host_file)
@@ -83,13 +108,20 @@ def _triggering_event(event: dict):
         if all(event.get(key) == val for key, val in trigger.items()):
             return trigger
 
+def dict2env(env: dict, prefix, src_dict):
+  for key, value in src_dict.items():
+    if isinstance(value, dict):
+      dict2env(env, prefix + '_' + key.upper(), value)
+    else:
+      env[prefix + '_' + key.upper()] = str(value)
 
 @click.command()
 @click.option('--hosts-file', default='/etc/hosts', help='The hosts file to update.')
 @click.option('--once', default=False, help='Run the update script once only.', is_flag=True)
 @click.option('--skip-initial', default=False, help="Don't run the update script one time before hooking into the docker event stream.", is_flag=True)
+@click.option('--with-command', default=None, help="Run command on trigger event")
 @click_log.simple_verbosity_option(logger)
-def main(hosts_file: str, skip_initial: bool, once: bool):
+def main(hosts_file: str, skip_initial: bool, once: bool, with_command):
     """Program that automatically updates your `/etc/hosts` file based on your running docker containers."""
     client = docker.from_env()
     if not skip_initial or once:
@@ -111,7 +143,7 @@ def main(hosts_file: str, skip_initial: bool, once: bool):
             continue
 
         logger.info(f'Got triggering event. type={trigger["Type"]} status={trigger["status"]}')
-        if not update_hosts_file(hosts_file):
+        if not update_hosts_file(hosts_file, trigger_type=trigger["Type"], trigger_status=trigger["status"], with_command=with_command, event=event):
             return -1
 
 
